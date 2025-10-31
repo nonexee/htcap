@@ -458,10 +458,17 @@ class InteractionHandler {
     if (this.options.enableKeyboardEvents) {
       await this._sendKeyboardEvents(element);
     }
+
+    // 7. Accessibility (ARIA) interactions
+    await this._interactWithAriaElement(element, target);
+
+    // 8. Table interactions
+    await this._interactWithTable(element, target);
   }
 
   /**
-   * Interact with form fields
+   * Interact with form fields - COMPREHENSIVE
+   * Tries multiple values, triggers all events
    * @private
    */
   async _interactWithFormField(element, target) {
@@ -470,32 +477,161 @@ class InteractionHandler {
       const type = await element.evaluate(el => el.type);
 
       if (tagName === 'INPUT') {
-        if (type === 'text' || type === 'email' || type === 'search' || type === 'url') {
-          // Type something to trigger autocomplete
-          await element.type('test', { delay: 100 });
-          await sleep(500);
-          await element.press('Backspace');
-          await element.press('Backspace');
-          await element.press('Backspace');
-          await element.press('Backspace');
+        if (type === 'text' || type === 'email' || type === 'search' || type === 'url' ||
+            type === 'tel' || type === 'password' || !type) {
+          // Try multiple values to trigger different responses
+          const testValues = [
+            'test', 'admin', 'user', 'test@example.com', '123',
+            'a', 'ab', 'abc' // Progressive typing
+          ];
+
+          for (const value of testValues.slice(0, 3)) { // Try 3 different values
+            try {
+              // Clear field
+              await element.click({ clickCount: 3 }); // Triple-click to select all
+              await element.press('Backspace');
+
+              // Type value
+              await element.type(value, { delay: 50 });
+              await sleep(400); // Wait for autocomplete/validation
+
+              // Trigger blur event (validation often happens on blur)
+              await this.page.evaluate(el => {
+                el.dispatchEvent(new Event('input', { bubbles: true }));
+                el.dispatchEvent(new Event('change', { bubbles: true }));
+                el.dispatchEvent(new Event('blur', { bubbles: true }));
+              }, element);
+              await sleep(300);
+            } catch (e) {}
+          }
+
+          // Clear field
+          try {
+            await element.click({ clickCount: 3 });
+            await element.press('Backspace');
+          } catch (e) {}
+
+        } else if (type === 'number' || type === 'range') {
+          // Try different numbers
+          const numbers = ['0', '1', '10', '100', '-1'];
+          for (const num of numbers.slice(0, 2)) {
+            try {
+              await element.click({ clickCount: 3 });
+              await element.type(num, { delay: 50 });
+              await sleep(300);
+            } catch (e) {}
+          }
+
+        } else if (type === 'date' || type === 'datetime-local' || type === 'time' ||
+                   type === 'week' || type === 'month') {
+          // Trigger the date picker
+          try {
+            await element.click();
+            await sleep(500);
+            // Type a date (might trigger date picker)
+            await element.type('2024-01-01', { delay: 50 });
+            await sleep(500);
+          } catch (e) {}
+
         } else if (type === 'checkbox' || type === 'radio') {
-          // Toggle it
-          await element.click();
-          await sleep(300);
+          // Toggle multiple times to trigger all states
+          try {
+            await element.click();
+            await sleep(300);
+            await element.click(); // Toggle back
+            await sleep(300);
+          } catch (e) {}
+
+        } else if (type === 'file') {
+          // Can't actually upload, but we can click to open dialog
+          try {
+            await element.click();
+            await sleep(500);
+            // Press Escape to close file dialog
+            await this.page.keyboard.press('Escape');
+            await sleep(300);
+          } catch (e) {}
+
+        } else if (type === 'color') {
+          // Click to open color picker
+          try {
+            await element.click();
+            await sleep(500);
+            await this.page.keyboard.press('Escape');
+          } catch (e) {}
         }
+
       } else if (tagName === 'SELECT') {
-        // Try different options
-        const options = await element.evaluate(el =>
-          Array.from(el.options).map(opt => opt.value).filter(v => v)
-        );
-        if (options.length > 0) {
-          await element.select(options[0]);
-          await sleep(500);
-        }
+        // Try ALL options to trigger different requests
+        try {
+          const options = await element.evaluate(el =>
+            Array.from(el.options).map((opt, idx) => ({ value: opt.value, index: idx }))
+          );
+
+          for (const opt of options.slice(0, 5)) { // Try up to 5 options
+            if (opt.value) {
+              try {
+                await element.select(opt.value);
+                await sleep(400);
+                // Trigger change event
+                await this.page.evaluate(el => {
+                  el.dispatchEvent(new Event('change', { bubbles: true }));
+                }, element);
+                await sleep(400);
+              } catch (e) {}
+            }
+          }
+
+          // Reset to first option
+          if (options.length > 0 && options[0].value) {
+            await element.select(options[0].value).catch(() => {});
+          }
+        } catch (e) {}
+
       } else if (tagName === 'TEXTAREA') {
-        await element.type('test\n', { delay: 100 });
-        await sleep(500);
+        // Try multiple text values
+        const texts = ['test', 'Hello\nWorld', 'Lorem ipsum dolor sit amet'];
+        for (const text of texts.slice(0, 2)) {
+          try {
+            await element.click({ clickCount: 3 });
+            await element.type(text, { delay: 50 });
+            await sleep(400);
+            await this.page.evaluate(el => {
+              el.dispatchEvent(new Event('input', { bubbles: true }));
+              el.dispatchEvent(new Event('change', { bubbles: true }));
+            }, element);
+            await sleep(300);
+          } catch (e) {}
+        }
+
+        // Clear
+        try {
+          await element.click({ clickCount: 3 });
+          await element.press('Backspace');
+        } catch (e) {}
       }
+
+      // For contenteditable elements
+      if (tagName === 'DIV' || tagName === 'SPAN') {
+        const isContentEditable = await element.evaluate(el =>
+          el.getAttribute('contenteditable') === 'true' || el.getAttribute('contenteditable') === ''
+        );
+
+        if (isContentEditable) {
+          try {
+            await element.click();
+            await element.type('test content', { delay: 50 });
+            await sleep(400);
+            // Clear
+            await this.page.evaluate(el => {
+              el.textContent = '';
+              el.dispatchEvent(new Event('input', { bubbles: true }));
+            }, element);
+            await sleep(300);
+          } catch (e) {}
+        }
+      }
+
     } catch (e) {
       // Ignore form interaction errors
     }
@@ -518,8 +654,216 @@ class InteractionHandler {
       // Try Escape
       await element.press('Escape');
       await sleep(200);
+
+      // Try Space (for buttons/checkboxes)
+      await element.press('Space');
+      await sleep(200);
+
+      // Try Arrow keys (for dropdowns, sliders, etc.)
+      await element.press('ArrowDown');
+      await sleep(200);
+      await element.press('ArrowUp');
+      await sleep(200);
     } catch (e) {
       // Ignore
+    }
+  }
+
+  /**
+   * Interact with ARIA/accessibility elements
+   * @private
+   */
+  async _interactWithAriaElement(element, target) {
+    try {
+      if (!target.ariaAttrs || Object.keys(target.ariaAttrs).length === 0) {
+        return; // No ARIA attributes
+      }
+
+      // Handle aria-expanded (expandable sections, accordions, dropdowns)
+      if (target.ariaAttrs['aria-expanded'] !== undefined) {
+        const isExpanded = target.ariaAttrs['aria-expanded'] === 'true';
+        // Click to toggle
+        try {
+          await element.click();
+          await sleep(500);
+          // If it was collapsed, clicking expanded it - explore the newly visible content
+          // If it was expanded, clicking collapsed it
+          if (!isExpanded) {
+            await sleep(500); // Extra wait for content to load
+          }
+        } catch (e) {}
+      }
+
+      // Handle aria-haspopup (elements that trigger popups/menus)
+      if (target.ariaAttrs['aria-haspopup']) {
+        try {
+          await element.click();
+          await sleep(600);
+          // Press Escape to close
+          await this.page.keyboard.press('Escape');
+          await sleep(300);
+        } catch (e) {}
+      }
+
+      // Handle aria-controls (element controls another element)
+      if (target.ariaAttrs['aria-controls']) {
+        try {
+          // Click the control
+          await element.click();
+          await sleep(500);
+
+          // Try to find the controlled element
+          const controlsId = target.ariaAttrs['aria-controls'];
+          const controlledExists = await this.page.$(`#${controlsId}`);
+          if (controlledExists) {
+            // The controlled element is now visible/active
+            await sleep(500);
+          }
+        } catch (e) {}
+      }
+
+      // Handle aria-pressed (toggle buttons)
+      if (target.ariaAttrs['aria-pressed'] !== undefined) {
+        try {
+          await element.click();
+          await sleep(400);
+          // Toggle back
+          await element.click();
+          await sleep(400);
+        } catch (e) {}
+      }
+
+      // Handle aria-checked (checkboxes, radio buttons, switches)
+      if (target.ariaAttrs['aria-checked'] !== undefined) {
+        try {
+          await element.click();
+          await sleep(400);
+          await element.click();
+          await sleep(400);
+        } catch (e) {}
+      }
+
+      // Handle aria-selected (selectable items in lists, tabs)
+      if (target.ariaAttrs['aria-selected'] !== undefined) {
+        try {
+          await element.click();
+          await sleep(500);
+        } catch (e) {}
+      }
+
+      // Handle specific roles
+      if (target.role) {
+        switch (target.role) {
+          case 'tab':
+            // Click tab to switch views
+            try {
+              await element.click();
+              await sleep(600);
+            } catch (e) {}
+            break;
+
+          case 'combobox':
+          case 'listbox':
+            // Click to open, then try arrow keys
+            try {
+              await element.click();
+              await sleep(400);
+              await element.press('ArrowDown');
+              await sleep(300);
+              await element.press('ArrowDown');
+              await sleep(300);
+              await element.press('Enter');
+              await sleep(400);
+            } catch (e) {}
+            break;
+
+          case 'slider':
+          case 'spinbutton':
+            // Try arrow keys to change value
+            try {
+              await element.click();
+              await element.press('ArrowUp');
+              await sleep(300);
+              await element.press('ArrowUp');
+              await sleep(300);
+              await element.press('ArrowDown');
+              await sleep(300);
+            } catch (e) {}
+            break;
+
+          case 'switch':
+            // Toggle switch
+            try {
+              await element.click();
+              await sleep(400);
+              await element.click();
+              await sleep(400);
+            } catch (e) {}
+            break;
+        }
+      }
+    } catch (e) {
+      // Ignore errors
+    }
+  }
+
+  /**
+   * Interact with table elements
+   * @private
+   */
+  async _interactWithTable(element, target) {
+    try {
+      const tagName = target.selector.toUpperCase();
+
+      // Click on table rows/cells - might trigger selection, expansion, navigation
+      if (['TR', 'TD', 'TH'].includes(tagName)) {
+        try {
+          await element.click();
+          await sleep(500);
+
+          // Try double-click (might open detail view)
+          await element.click({ clickCount: 2 });
+          await sleep(500);
+
+          // Try right-click (might open context menu)
+          await element.click({ button: 'right' });
+          await sleep(400);
+          await this.page.keyboard.press('Escape');
+          await sleep(300);
+        } catch (e) {}
+      }
+
+      // If it's a table, try to find and click sortable headers
+      if (tagName === 'TABLE') {
+        try {
+          // Find sortable headers (often have onclick, data-sort, etc.)
+          const headers = await this.page.evaluate(() => {
+            const ths = document.querySelectorAll('th[onclick], th[data-sort], th.sortable, th[class*="sort"]');
+            return Array.from(ths).map(th => ({
+              text: th.textContent.trim(),
+              signature: th.outerHTML.substring(0, 100)
+            }));
+          });
+
+          // Click a few headers to trigger sorting
+          for (const header of headers.slice(0, 3)) {
+            try {
+              const headerEl = await this.page.evaluateHandle(sig => {
+                return Array.from(document.querySelectorAll('th')).find(
+                  th => th.outerHTML.substring(0, 100) === sig
+                );
+              }, header.signature);
+
+              if (headerEl) {
+                await headerEl.click();
+                await sleep(600);
+              }
+            } catch (e) {}
+          }
+        } catch (e) {}
+      }
+    } catch (e) {
+      // Ignore errors
     }
   }
 
@@ -581,28 +925,102 @@ class InteractionHandler {
       const seen = new Set();
 
       const selectors = [
-        'button', 'input[type="button"]', 'input[type="submit"]',
-        '[role="button"]', '[type="button"]',
-        '[data-toggle]', '[data-target]', '[data-modal]', '[data-dialog]',
-        '[data-open]', '[data-show]', '[data-bs-toggle]', '[data-mdb-toggle]',
-        '[ng-click]', '[ng-submit]', '[v-on:click]', '[@click]', '[\\@click]',
-        '[x-on:click]', '[data-action="click"]', '[data-action]',
-        'a[href]', 'a[href="#"]', 'a[href^="#"]', 'a[href="javascript:"]', 'a[onclick]',
-        '[onclick]', '[onmousedown]', '[ondblclick]',
-        '.btn', '.button', '.tab', '.tab-link', '.dropdown-toggle',
-        '.dropdown-trigger', '.accordion', '.accordion-toggle', '.expand',
-        '.collapse', '.toggle', '.menu-item', '.nav-link', '.nav-item',
-        '.modal-trigger', '.open-modal', '.show-modal', '.popup-trigger',
-        'div[onclick]', 'span[onclick]', 'div[class*="click"]',
-        'div[class*="button"]', 'span[class*="click"]', 'span[class*="btn"]',
-        'svg[onclick]', 'svg[class*="click"]',
-        'input[type="text"]', 'input[type="email"]', 'input[type="search"]',
+        // ===== BUTTONS & SUBMITS =====
+        'button', 'input[type="button"]', 'input[type="submit"]', 'input[type="reset"]',
+        'input[type="image"]', '[role="button"]', '[type="button"]',
+
+        // ===== ALL FORM INPUTS (comprehensive) =====
+        'input[type="text"]', 'input[type="email"]', 'input[type="password"]',
+        'input[type="search"]', 'input[type="tel"]', 'input[type="url"]',
+        'input[type="number"]', 'input[type="range"]', 'input[type="date"]',
+        'input[type="datetime-local"]', 'input[type="time"]', 'input[type="week"]',
+        'input[type="month"]', 'input[type="color"]', 'input[type="file"]',
         'input[type="checkbox"]', 'input[type="radio"]',
-        'select', 'textarea',
-        '[contenteditable="true"]', '[role="textbox"]',
-        // More aggressive selectors
-        'a', 'img[onclick]', '[role="link"]', '[role="tab"]',
-        'li[onclick]', 'td[onclick]', 'tr[onclick]'
+        'input:not([type])', // Default type="text"
+        'select', 'textarea', 'output',
+        '[contenteditable="true"]', '[contenteditable=""]',
+
+        // ===== DATA ATTRIBUTES (toggles, targets, actions) =====
+        '[data-toggle]', '[data-target]', '[data-modal]', '[data-dialog]',
+        '[data-open]', '[data-show]', '[data-hide]', '[data-close]',
+        '[data-bs-toggle]', '[data-mdb-toggle]', '[data-dismiss]', '[data-bs-dismiss]',
+        '[data-action]', '[data-click]', '[data-trigger]', '[data-load]',
+        '[data-src]', '[data-url]', '[data-href]', '[data-link]',
+
+        // ===== FRAMEWORK-SPECIFIC (Angular, React, Vue, Alpine, etc.) =====
+        '[ng-click]', '[ng-submit]', '[ng-change]', '[ng-focus]', '[ng-blur]',
+        '[v-on:click]', '[v-on:change]', '[v-on:focus]', '[v-on:submit]',
+        '[@click]', '[\\@click]', '[@change]', '[@submit]', '[@focus]',
+        '[x-on:click]', '[x-on:change]', '[x-on:submit]',
+        '[data-action="click"]', '[wire:click]', '[hx-get]', '[hx-post]',
+
+        // ===== LINKS (all types) =====
+        'a', 'a[href]', 'a[href="#"]', 'a[href^="#"]', 'a[href="javascript:"]',
+        'a[onclick]', 'area[href]', '[role="link"]',
+
+        // ===== EVENT HANDLERS (onclick, etc.) =====
+        '[onclick]', '[onmousedown]', '[onmouseup]', '[ondblclick]',
+        '[onchange]', '[oninput]', '[onfocus]', '[onblur]', '[onsubmit]',
+
+        // ===== COMMON CLASSES (buttons, tabs, navigation) =====
+        '.btn', '.button', '.btn-primary', '.btn-secondary', '.btn-link',
+        '.tab', '.tab-link', '.tab-item', '.tab-button', '.tab-pane',
+        '.dropdown', '.dropdown-toggle', '.dropdown-trigger', '.dropdown-menu',
+        '.accordion', '.accordion-toggle', '.accordion-item', '.accordion-button',
+        '.expand', '.collapse', '.toggle', '.switch',
+        '.menu-item', '.nav-link', '.nav-item', '.navbar-item',
+        '.sidebar-item', '.list-item', '.card', '.panel',
+
+        // ===== MODALS, DIALOGS, OVERLAYS =====
+        '.modal', '.modal-trigger', '.open-modal', '.show-modal', '.popup-trigger',
+        '.dialog', '.overlay', '.backdrop', '.lightbox', '.tooltip',
+        '[role="dialog"]', '[role="alertdialog"]', '[aria-modal="true"]',
+
+        // ===== TABLES (rows, cells - might have click handlers) =====
+        'table', 'tr', 'td', 'th', 'tbody', 'thead', 'tfoot',
+        'tr[onclick]', 'td[onclick]', 'th[onclick]',
+        'tr[data-action]', 'td[data-action]',
+        '[role="row"]', '[role="cell"]', '[role="gridcell"]',
+
+        // ===== ACCESSIBILITY (ARIA roles & attributes) =====
+        '[role="tab"]', '[role="tabpanel"]', '[role="menuitem"]',
+        '[role="option"]', '[role="checkbox"]', '[role="radio"]',
+        '[role="switch"]', '[role="slider"]', '[role="spinbutton"]',
+        '[role="combobox"]', '[role="listbox"]', '[role="tree"]', '[role="treeitem"]',
+        '[role="searchbox"]', '[role="textbox"]',
+        '[aria-expanded]', '[aria-haspopup]', '[aria-controls]',
+        '[aria-pressed]', '[aria-selected]', '[aria-checked]',
+        '[tabindex="0"]', '[tabindex]:not([tabindex="-1"])',
+
+        // ===== LISTS (might contain clickable items) =====
+        'li[onclick]', 'ul[onclick]', 'ol[onclick]',
+        'li[data-action]', 'li[data-value]',
+        '[role="listitem"]', '[role="menuitem"]', '[role="option"]',
+
+        // ===== DIVS/SPANS with click handlers or interactive classes =====
+        'div[onclick]', 'span[onclick]', 'div[onmousedown]', 'span[onmousedown]',
+        'div[class*="click"]', 'span[class*="click"]',
+        'div[class*="button"]', 'span[class*="button"]',
+        'div[class*="btn"]', 'span[class*="btn"]',
+        'div[class*="action"]', 'span[class*="action"]',
+        'div[class*="trigger"]', 'span[class*="trigger"]',
+        'div[class*="link"]', 'span[class*="link"]',
+
+        // ===== IMAGES & SVG (might be clickable) =====
+        'img[onclick]', 'svg[onclick]', 'svg[class*="click"]',
+        'img[data-action]', 'svg[data-action]',
+        'figure[onclick]', 'picture[onclick]',
+
+        // ===== MEDIA & EMBEDS =====
+        'video', 'audio', 'canvas', 'iframe',
+        'embed', 'object',
+
+        // ===== FORMS =====
+        'form', 'fieldset', 'legend', 'label', 'label[for]',
+
+        // ===== OTHER INTERACTIVE ELEMENTS =====
+        'details', 'summary', 'meter', 'progress',
+        '[draggable="true"]', '[droppable]'
       ];
 
       const isInteractive = (el) => {
@@ -635,22 +1053,48 @@ class InteractionHandler {
 
         const text = (
           el.innerText || el.textContent || el.value ||
-          el.getAttribute('aria-label') || el.getAttribute('placeholder') || ''
+          el.getAttribute('aria-label') || el.getAttribute('placeholder') ||
+          el.getAttribute('title') || el.getAttribute('alt') || ''
         ).trim();
+
+        // Capture ALL relevant attributes
+        const ariaAttrs = {};
+        const dataAttrs = {};
+        const ngAttrs = {};
+        const vueAttrs = {};
+
+        for (let i = 0; i < el.attributes.length; i++) {
+          const attr = el.attributes[i];
+          if (attr.name.startsWith('aria-')) {
+            ariaAttrs[attr.name] = attr.value;
+          } else if (attr.name.startsWith('data-')) {
+            dataAttrs[attr.name.substring(5)] = attr.value; // Remove 'data-' prefix
+          } else if (attr.name.startsWith('ng-')) {
+            ngAttrs[attr.name] = attr.value;
+          } else if (attr.name.startsWith('v-') || attr.name.startsWith('@') || attr.name.startsWith(':')) {
+            vueAttrs[attr.name] = attr.value;
+          }
+        }
 
         targets.push({
           signature,
           selector: el.tagName.toLowerCase(),
           text: text.substring(0, 50),
           id: el.id || '',
+          name: el.getAttribute('name') || '',
           classes: (el.className || '').toString(),
           type: el.getAttribute('type') || el.tagName.toLowerCase(),
-          dataAttrs: {
-            toggle: el.getAttribute('data-toggle'),
-            target: el.getAttribute('data-target'),
-            action: el.getAttribute('data-action'),
-            dismiss: el.getAttribute('data-dismiss') || el.getAttribute('data-bs-dismiss')
-          }
+          role: el.getAttribute('role') || '',
+          tabindex: el.getAttribute('tabindex') || '',
+          href: el.getAttribute('href') || '',
+          src: el.getAttribute('src') || '',
+          ariaAttrs,
+          dataAttrs,
+          ngAttrs,
+          vueAttrs,
+          // Capture if it's a form element
+          isFormElement: ['INPUT', 'SELECT', 'TEXTAREA', 'BUTTON'].includes(el.tagName),
+          formType: el.getAttribute('type') || el.tagName.toLowerCase()
         });
       };
 
