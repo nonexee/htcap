@@ -54,11 +54,58 @@ class InteractionHandler {
   }
 
   /**
+   * Wait for SPA framework to fully render
+   * @private
+   */
+  async _waitForSPAToRender() {
+    try {
+      console.log(`      [INSANE-DEEP] ⏳ Waiting for SPA to render...`);
+
+      // Wait for network idle first
+      await this.page.waitForNetworkIdle({ timeout: 5000, idleTime: 500 }).catch(() => {});
+
+      // Wait for frameworks to stabilize
+      await this.page.evaluate(async () => {
+        // Wait for Angular
+        if (window.getAllAngularTestabilities) {
+          try {
+            const testabilities = window.getAllAngularTestabilities();
+            if (testabilities && testabilities.length > 0) {
+              await Promise.race([
+                Promise.all(testabilities.map(testability =>
+                  new Promise(resolve => {
+                    try {
+                      testability.whenStable(() => resolve());
+                    } catch (e) {
+                      resolve();
+                    }
+                  })
+                )),
+                new Promise(r => setTimeout(r, 3000)) // Max 3s wait
+              ]);
+            }
+          } catch (e) {}
+        }
+
+        // Wait for any pending animations/timeouts
+        await new Promise(r => setTimeout(r, 2000));
+      });
+
+      console.log(`      [INSANE-DEEP] ✅ SPA render complete`);
+    } catch (e) {
+      console.log(`      [INSANE-DEEP] ⚠️  Render wait error: ${e.message}`);
+    }
+  }
+
+  /**
    * Start insanely deep interaction
    * @returns {Promise<Object>}
    */
   async interactWithPage() {
     console.log(`      [INSANE-DEEP] 🚀 Starting ULTIMATE interaction mode`);
+
+    // Wait for SPA to fully render
+    await this._waitForSPAToRender();
 
     // Set up comprehensive monitoring
     await this._setupComprehensiveMonitoring();
@@ -525,7 +572,7 @@ class InteractionHandler {
   }
 
   /**
-   * Find ALL interactive elements (comprehensive)
+   * Find ALL interactive elements (comprehensive + Shadow DOM + iframes)
    * @private
    */
   async _findAllInteractiveElements() {
@@ -540,7 +587,7 @@ class InteractionHandler {
         '[data-open]', '[data-show]', '[data-bs-toggle]', '[data-mdb-toggle]',
         '[ng-click]', '[ng-submit]', '[v-on:click]', '[@click]', '[\\@click]',
         '[x-on:click]', '[data-action="click"]', '[data-action]',
-        'a[href="#"]', 'a[href^="#"]', 'a[href="javascript:"]', 'a[onclick]',
+        'a[href]', 'a[href="#"]', 'a[href^="#"]', 'a[href="javascript:"]', 'a[onclick]',
         '[onclick]', '[onmousedown]', '[ondblclick]',
         '.btn', '.button', '.tab', '.tab-link', '.dropdown-toggle',
         '.dropdown-trigger', '.accordion', '.accordion-toggle', '.expand',
@@ -552,52 +599,107 @@ class InteractionHandler {
         'input[type="text"]', 'input[type="email"]', 'input[type="search"]',
         'input[type="checkbox"]', 'input[type="radio"]',
         'select', 'textarea',
-        '[contenteditable="true"]', '[role="textbox"]'
+        '[contenteditable="true"]', '[role="textbox"]',
+        // More aggressive selectors
+        'a', 'img[onclick]', '[role="link"]', '[role="tab"]',
+        'li[onclick]', 'td[onclick]', 'tr[onclick]'
       ];
 
       const isInteractive = (el) => {
+        // Less strict - allow more elements through
         const style = window.getComputedStyle(el);
         if (style.display === 'none' || style.visibility === 'hidden') return false;
+        if (style.opacity === '0') return false;
         if (el.disabled || el.hasAttribute('disabled')) return false;
+
         const rect = el.getBoundingClientRect();
-        return rect.width > 0 && rect.height > 0;
+        if (rect.width === 0 || rect.height === 0) return false;
+
+        // Also check if cursor is pointer (clickable)
+        if (style.cursor === 'pointer') return true;
+
+        return true;
       };
 
+      const addElement = (el) => {
+        if (!isInteractive(el)) return;
+
+        const signature =
+          el.outerHTML.substring(0, 200) +
+          (el.id || '') +
+          (el.className || '') +
+          el.tagName;
+
+        if (seen.has(signature)) return;
+        seen.add(signature);
+
+        const text = (
+          el.innerText || el.textContent || el.value ||
+          el.getAttribute('aria-label') || el.getAttribute('placeholder') || ''
+        ).trim();
+
+        targets.push({
+          signature,
+          selector: el.tagName.toLowerCase(),
+          text: text.substring(0, 50),
+          id: el.id || '',
+          classes: (el.className || '').toString(),
+          type: el.getAttribute('type') || el.tagName.toLowerCase(),
+          dataAttrs: {
+            toggle: el.getAttribute('data-toggle'),
+            target: el.getAttribute('data-target'),
+            action: el.getAttribute('data-action'),
+            dismiss: el.getAttribute('data-dismiss') || el.getAttribute('data-bs-dismiss')
+          }
+        });
+      };
+
+      // Search in main document
       selectors.forEach(selector => {
         try {
-          document.querySelectorAll(selector).forEach((el) => {
-            if (!isInteractive(el)) return;
-
-            const signature =
-              el.outerHTML.substring(0, 200) +
-              (el.id || '') +
-              (el.className || '') +
-              el.tagName;
-
-            if (seen.has(signature)) return;
-            seen.add(signature);
-
-            const text = (
-              el.innerText || el.textContent || el.value ||
-              el.getAttribute('aria-label') || el.getAttribute('placeholder') || ''
-            ).trim();
-
-            targets.push({
-              signature,
-              selector: el.tagName.toLowerCase(),
-              text: text.substring(0, 50),
-              id: el.id || '',
-              classes: (el.className || '').toString(),
-              type: el.getAttribute('type') || el.tagName.toLowerCase(),
-              dataAttrs: {
-                toggle: el.getAttribute('data-toggle'),
-                target: el.getAttribute('data-target'),
-                action: el.getAttribute('data-action')
-              }
-            });
-          });
+          document.querySelectorAll(selector).forEach(addElement);
         } catch (e) {}
       });
+
+      // Search in Shadow DOM
+      const searchShadowDOM = (root) => {
+        try {
+          root.querySelectorAll('*').forEach(el => {
+            if (el.shadowRoot) {
+              selectors.forEach(selector => {
+                try {
+                  el.shadowRoot.querySelectorAll(selector).forEach(addElement);
+                } catch (e) {}
+              });
+              searchShadowDOM(el.shadowRoot);
+            }
+          });
+        } catch (e) {}
+      };
+      searchShadowDOM(document);
+
+      // Debug: log if we found nothing
+      if (targets.length === 0) {
+        console.log('[DEBUG] Found 0 elements. Page info:');
+        console.log('  - Body HTML length:', document.body?.innerHTML?.length || 0);
+        console.log('  - All buttons:', document.querySelectorAll('button').length);
+        console.log('  - All links:', document.querySelectorAll('a').length);
+        console.log('  - All inputs:', document.querySelectorAll('input').length);
+        console.log('  - All divs:', document.querySelectorAll('div').length);
+        console.log('  - Has Angular?', !!window.angular || !!window.ng);
+        console.log('  - Has React?', !!window.React);
+        console.log('  - Has Vue?', !!window.Vue);
+
+        // Fallback: find ANY elements with cursor:pointer
+        document.querySelectorAll('*').forEach(el => {
+          const style = window.getComputedStyle(el);
+          if (style.cursor === 'pointer' && style.display !== 'none') {
+            addElement(el);
+          }
+        });
+
+        console.log('  - After fallback (cursor:pointer):', targets.length);
+      }
 
       return targets;
     });
