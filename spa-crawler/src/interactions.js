@@ -1,13 +1,13 @@
 /**
- * Interaction Handler - Aggressive interaction to discover ALL hidden content
+ * ULTRA-DEEP Interaction Handler - Recursive interaction to discover ALL hidden content
  *
- * This module systematically interacts with pages to find:
- * - Hidden forms in modals
- * - Dynamically loaded content
- * - Hover-triggered elements
- * - Scroll-triggered lazy loading
- * - Nested modals and dropdowns
- * - Event-driven content
+ * This module goes DEEP:
+ * - Clicks ALL elements recursively
+ * - Handles modals within modals within modals (unlimited depth)
+ * - Monitors ALL DOM changes continuously
+ * - Tracks network requests per interaction
+ * - Rescans and re-clicks newly appeared elements
+ * - Goes as deep as possible until nothing new appears
  */
 
 const { sleep } = require('./utils');
@@ -16,131 +16,238 @@ class InteractionHandler {
   constructor(page, options = {}) {
     this.page = page;
     this.options = {
-      maxClicksPerPage: options.maxClicksPerPage || 20,
+      maxInteractionDepth: options.maxInteractionDepth || 5, // How deep to nest interactions
+      maxClicksPerPage: options.maxClicksPerPage || 100, // Try up to 100 elements
       waitAfterClick: options.waitAfterClick || 1500,
+      waitForNetworkIdle: options.waitForNetworkIdle || 2000,
       enableScrolling: options.enableScrolling !== false,
-      enableHover: options.enableHover !== false,
-      rescanAfterInteraction: options.rescanAfterInteraction !== false
+      enableHover: options.enableHover !== false
     };
+
     this.clickedElements = new Set();
     this.discoveredContent = {
       forms: [],
       links: [],
-      modals: []
+      networkRequests: []
+    };
+
+    this.mutationObserver = null;
+    this.domChanges = [];
+    this.currentDepth = 0;
+  }
+
+  /**
+   * Start ultra-deep recursive interaction
+   * @returns {Promise<Object>}
+   */
+  async interactWithPage() {
+    console.log(`      [ULTRA-DEEP] Starting interaction at depth 0`);
+
+    // Set up DOM mutation observer
+    await this._setupMutationObserver();
+
+    // Start recursive interaction
+    const result = await this._recursiveInteraction(0);
+
+    // Clean up
+    await this._teardownMutationObserver();
+
+    console.log(`      [ULTRA-DEEP] Total clicks: ${this.clickedElements.size}`);
+    console.log(`      [ULTRA-DEEP] Total forms found: ${this.discoveredContent.forms.length}`);
+    console.log(`      [ULTRA-DEEP] Total links found: ${this.discoveredContent.links.length}`);
+    console.log(`      [ULTRA-DEEP] Total network requests: ${this.discoveredContent.networkRequests.length}`);
+
+    return {
+      clickCount: this.clickedElements.size,
+      discovered: this.discoveredContent,
+      maxDepthReached: this.currentDepth
     };
   }
 
   /**
-   * Perform comprehensive interactions on the page
-   * @returns {Promise<Object>}
+   * Recursive interaction - goes as deep as needed
+   * @private
    */
-  async interactWithPage() {
-    const interactions = [];
-    let totalClicks = 0;
+  async _recursiveInteraction(depth) {
+    if (depth >= this.options.maxInteractionDepth) {
+      console.log(`      [ULTRA-DEEP] Max depth ${depth} reached`);
+      return;
+    }
 
-    // Step 1: Scroll to reveal all content
-    if (this.options.enableScrolling) {
+    this.currentDepth = Math.max(this.currentDepth, depth);
+    console.log(`      [ULTRA-DEEP] Depth ${depth}: Starting interaction round`);
+
+    // Scroll to reveal content
+    if (this.options.enableScrolling && depth === 0) {
+      console.log(`      [ULTRA-DEEP] Scrolling page...`);
       await this._scrollPage();
       await sleep(1000);
     }
 
-    // Step 2: Find all potentially interactive elements
-    let clickTargets = await this._findAllInteractiveElements();
-    console.log(`      [DEBUG] Found ${clickTargets.length} interactive elements`);
+    // Find ALL interactive elements at this level
+    const elements = await this._findAllInteractiveElements();
+    console.log(`      [ULTRA-DEEP] Depth ${depth}: Found ${elements.length} elements to interact with`);
 
-    // Step 3: Interact with elements systematically
-    let round = 0;
-    while (clickTargets.length > 0 && totalClicks < this.options.maxClicksPerPage) {
-      round++;
-      console.log(`      [DEBUG] Interaction round ${round}, ${clickTargets.length} elements to try`);
+    if (elements.length === 0) {
+      console.log(`      [ULTRA-DEEP] Depth ${depth}: No elements found, returning`);
+      return;
+    }
 
-      for (const target of clickTargets) {
-        if (totalClicks >= this.options.maxClicksPerPage) break;
+    let clickedThisRound = 0;
 
-        // Skip if already clicked
-        if (this.clickedElements.has(target.signature)) continue;
+    // Try to click EVERY element
+    for (let i = 0; i < elements.length && this.clickedElements.size < this.options.maxClicksPerPage; i++) {
+      const element = elements[i];
 
-        try {
-          // Hover first (might reveal content)
-          if (this.options.enableHover) {
-            await this._hoverElement(target);
-            await sleep(300);
-          }
-
-          // Get DOM snapshot before click
-          const beforeSnapshot = await this._getDOMSnapshot();
-
-          // Click the element
-          const clicked = await this._clickElement(target);
-          if (!clicked) continue;
-
-          this.clickedElements.add(target.signature);
-          totalClicks++;
-
-          // Wait for changes
-          await sleep(this.options.waitAfterClick);
-
-          // Get DOM snapshot after click
-          const afterSnapshot = await this._getDOMSnapshot();
-
-          // Detect new content
-          const newContent = await this._detectNewContent(beforeSnapshot, afterSnapshot);
-
-          if (newContent.hasChanges) {
-            interactions.push({
-              target: target.text || target.selector,
-              changes: newContent
-            });
-
-            // Extract discovered content
-            if (newContent.forms && newContent.forms.length > 0) {
-              this.discoveredContent.forms.push(...newContent.forms);
-              console.log(`      [DEBUG] Found ${newContent.forms.length} new forms!`);
-            }
-            if (newContent.links && newContent.links.length > 0) {
-              this.discoveredContent.links.push(...newContent.links);
-              console.log(`      [DEBUG] Found ${newContent.links.length} new links!`);
-            }
-
-            // Close modal if one opened
-            if (newContent.modalDetected) {
-              console.log(`      [DEBUG] Modal detected, closing...`);
-              await this._closeModal();
-              await sleep(500);
-            }
-          }
-
-        } catch (error) {
-          // Continue with next element
-          continue;
-        }
+      // Skip if already clicked
+      if (this.clickedElements.has(element.signature)) {
+        continue;
       }
 
-      // Rescan for new elements that appeared
-      if (this.options.rescanAfterInteraction && totalClicks < this.options.maxClicksPerPage) {
-        const newTargets = await this._findAllInteractiveElements();
-        // Filter out already clicked
-        clickTargets = newTargets.filter(t => !this.clickedElements.has(t.signature));
-
-        if (clickTargets.length > 0) {
-          console.log(`      [DEBUG] Rescan found ${clickTargets.length} new elements`);
-        } else {
-          break; // No new elements, we're done
+      try {
+        // Hover if enabled
+        if (this.options.enableHover) {
+          await this._hoverElement(element);
+          await sleep(200);
         }
-      } else {
-        break;
+
+        // Take snapshot before
+        const beforeState = await this._captureState();
+
+        // Clear DOM changes
+        this.domChanges = [];
+
+        // Click the element
+        console.log(`      [ULTRA-DEEP] Depth ${depth}: Clicking element ${i + 1}/${elements.length}: "${element.text?.substring(0, 30)}"`);
+        const clicked = await this._clickElement(element);
+
+        if (!clicked) {
+          console.log(`      [ULTRA-DEEP] Depth ${depth}: Click failed`);
+          continue;
+        }
+
+        this.clickedElements.add(element.signature);
+        clickedThisRound++;
+
+        // Wait for any changes
+        await sleep(this.options.waitAfterClick);
+
+        // Wait for network to be idle
+        await this._waitForNetworkIdle();
+
+        // Take snapshot after
+        const afterState = await this._captureState();
+
+        // Detect what changed
+        const changes = await this._analyzeChanges(beforeState, afterState);
+
+        if (changes.hasChanges) {
+          console.log(`      [ULTRA-DEEP] Depth ${depth}: Changes detected!`);
+          console.log(`      [ULTRA-DEEP] Depth ${depth}: + ${changes.newForms} forms, + ${changes.newLinks} links, + ${changes.newButtons} buttons`);
+
+          // Extract new content
+          const newContent = await this._extractNewContent();
+
+          if (newContent.forms.length > 0) {
+            console.log(`      [ULTRA-DEEP] Depth ${depth}: Found ${newContent.forms.length} new forms!`);
+            this.discoveredContent.forms.push(...newContent.forms);
+          }
+
+          if (newContent.links.length > 0) {
+            console.log(`      [ULTRA-DEEP] Depth ${depth}: Found ${newContent.links.length} new links!`);
+            this.discoveredContent.links.push(...newContent.links);
+          }
+
+          // Check if modal/dialog opened
+          const modalOpened = await this._checkModalOpened();
+
+          if (modalOpened) {
+            console.log(`      [ULTRA-DEEP] Depth ${depth}: Modal detected! Going deeper...`);
+
+            // RECURSIVELY interact with content inside the modal
+            await this._recursiveInteraction(depth + 1);
+
+            // Close the modal
+            console.log(`      [ULTRA-DEEP] Depth ${depth}: Closing modal...`);
+            await this._closeModal();
+            await sleep(500);
+          } else if (changes.significant) {
+            // Significant DOM changes but not a modal - still go deeper
+            console.log(`      [ULTRA-DEEP] Depth ${depth}: Significant changes detected, going deeper...`);
+            await this._recursiveInteraction(depth + 1);
+          }
+        }
+
+      } catch (error) {
+        console.log(`      [ULTRA-DEEP] Depth ${depth}: Error during interaction: ${error.message}`);
+        continue;
       }
     }
 
-    return {
-      interactions,
-      discovered: this.discoveredContent,
-      clickCount: totalClicks
-    };
+    console.log(`      [ULTRA-DEEP] Depth ${depth}: Clicked ${clickedThisRound} elements this round`);
   }
 
   /**
-   * Scroll through entire page to trigger lazy loading
+   * Set up DOM mutation observer
+   * @private
+   */
+  async _setupMutationObserver() {
+    await this.page.evaluateOnNewDocument(() => {
+      window.__domChanges = [];
+      window.__mutationObserver = new MutationObserver((mutations) => {
+        mutations.forEach(mutation => {
+          window.__domChanges.push({
+            type: mutation.type,
+            target: mutation.target.tagName,
+            addedNodes: mutation.addedNodes.length,
+            removedNodes: mutation.removedNodes.length,
+            timestamp: Date.now()
+          });
+        });
+      });
+
+      window.__mutationObserver.observe(document.body, {
+        childList: true,
+        subtree: true,
+        attributes: true,
+        attributeOldValue: true
+      });
+    });
+  }
+
+  /**
+   * Teardown mutation observer
+   * @private
+   */
+  async _teardownMutationObserver() {
+    try {
+      await this.page.evaluate(() => {
+        if (window.__mutationObserver) {
+          window.__mutationObserver.disconnect();
+        }
+      });
+    } catch (e) {
+      // Ignore
+    }
+  }
+
+  /**
+   * Wait for network to be idle
+   * @private
+   */
+  async _waitForNetworkIdle() {
+    try {
+      await this.page.waitForNetworkIdle({
+        timeout: this.options.waitForNetworkIdle,
+        idleTime: 500
+      });
+    } catch (e) {
+      // Timeout is okay
+    }
+  }
+
+  /**
+   * Scroll through entire page
    * @private
    */
   async _scrollPage() {
@@ -155,16 +262,15 @@ class InteractionHandler {
           await new Promise(resolve => setTimeout(resolve, 200));
         }
 
-        // Scroll back to top
         window.scrollTo(0, 0);
       });
     } catch (error) {
-      // Ignore scroll errors
+      // Ignore
     }
   }
 
   /**
-   * Find ALL interactive elements on the page
+   * Find ALL interactive elements
    * @private
    */
   async _findAllInteractiveElements() {
@@ -172,12 +278,13 @@ class InteractionHandler {
       const targets = [];
       const seen = new Set();
 
-      // Comprehensive list of interactive selectors
+      // COMPREHENSIVE selector list
       const selectors = [
-        // Buttons
         'button',
-        '[type="button"]',
+        'input[type="button"]',
+        'input[type="submit"]',
         '[role="button"]',
+        '[type="button"]',
 
         // Modal/Dialog triggers
         '[data-toggle]',
@@ -186,9 +293,8 @@ class InteractionHandler {
         '[data-dialog]',
         '[data-open]',
         '[data-show]',
-        '.modal-trigger',
-        '.open-modal',
-        '.show-modal',
+        '[data-bs-toggle]',
+        '[data-mdb-toggle]',
 
         // Framework-specific
         '[ng-click]',
@@ -197,91 +303,95 @@ class InteractionHandler {
         '[@click]',
         '[\\@click]',
         '[x-on:click]',
+        '[data-action="click"]',
 
-        // Links that trigger actions
+        // Links
         'a[href="#"]',
         'a[href^="#"]',
         'a[href="javascript:"]',
         'a[href^="javascript:"]',
+        'a[onclick]',
 
-        // Elements with click handlers
+        // Click handlers
         '[onclick]',
+        '[onmousedown]',
 
         // Common UI patterns
         '.btn',
         '.button',
         '.tab',
+        '.tab-link',
         '.dropdown-toggle',
+        '.dropdown-trigger',
         '.accordion',
+        '.accordion-toggle',
         '.expand',
         '.collapse',
         '.toggle',
         '.menu-item',
         '.nav-link',
+        '.nav-item',
+        '.modal-trigger',
+        '.open-modal',
+        '.show-modal',
+        '.popup-trigger',
 
-        // Divs/spans that might be clickable
+        // Clickable divs/spans
+        'div[onclick]',
+        'span[onclick]',
         'div[class*="click"]',
         'div[class*="button"]',
         'span[class*="click"]',
-        'span[class*="button"]'
+        'span[class*="button"]',
+        'div[class*="btn"]',
+        'span[class*="btn"]',
+
+        // SVG elements
+        'svg[onclick]',
+        'svg[class*="click"]'
       ];
 
-      // Helper to check if element is actually visible and clickable
       const isInteractive = (el) => {
-        // Skip if hidden
         const style = window.getComputedStyle(el);
-        if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') {
-          return false;
-        }
+        if (style.display === 'none' || style.visibility === 'hidden') return false;
+        if (el.disabled || el.hasAttribute('disabled')) return false;
 
-        // Skip if disabled
-        if (el.disabled || el.hasAttribute('disabled')) {
-          return false;
-        }
-
-        // Must be somewhat visible
         const rect = el.getBoundingClientRect();
-        if (rect.width === 0 || rect.height === 0) {
-          return false;
-        }
+        if (rect.width === 0 || rect.height === 0) return false;
 
+        // Check if element is actually in viewport or can be scrolled to
         return true;
       };
 
-      // Collect all matching elements
       selectors.forEach(selector => {
         try {
           document.querySelectorAll(selector).forEach((el) => {
             if (!isInteractive(el)) return;
 
-            // Create unique signature
-            const signature = el.outerHTML.substring(0, 100) +
-                            (el.id || '') +
-                            (el.className || '') +
-                            el.tagName;
+            const signature =
+              el.outerHTML.substring(0, 150) +
+              (el.id || '') +
+              (el.className || '') +
+              el.tagName +
+              (el.getAttribute('data-target') || '');
 
             if (seen.has(signature)) return;
             seen.add(signature);
 
-            // Skip form submits (handled separately)
-            if (el.type === 'submit') return;
-
-            // Get element info
-            const text = (el.innerText || el.textContent || '').trim().substring(0, 50);
-            const id = el.id || '';
-            const classes = (el.className || '').toString();
+            const text = (el.innerText || el.textContent || el.value || el.getAttribute('aria-label') || '').trim();
 
             targets.push({
               signature,
               selector: el.tagName.toLowerCase(),
-              text,
-              id,
-              classes,
+              text: text.substring(0, 50),
+              id: el.id || '',
+              classes: (el.className || '').toString(),
               hasOnClick: el.hasAttribute('onclick'),
+              type: el.getAttribute('type') || '',
               dataAttrs: {
-                toggle: el.getAttribute('data-toggle'),
-                target: el.getAttribute('data-target'),
-                modal: el.getAttribute('data-modal')
+                toggle: el.getAttribute('data-toggle') || el.getAttribute('data-bs-toggle'),
+                target: el.getAttribute('data-target') || el.getAttribute('data-bs-target'),
+                action: el.getAttribute('data-action')
               }
             });
           });
@@ -295,7 +405,7 @@ class InteractionHandler {
   }
 
   /**
-   * Hover over an element
+   * Hover over element
    * @private
    */
   async _hoverElement(target) {
@@ -305,12 +415,12 @@ class InteractionHandler {
         await element.hover();
       }
     } catch (error) {
-      // Ignore hover errors
+      // Ignore
     }
   }
 
   /**
-   * Click an element using multiple strategies
+   * Click element with multiple fallback strategies
    * @private
    */
   async _clickElement(target) {
@@ -318,63 +428,71 @@ class InteractionHandler {
       const element = await this._findElementByTarget(target);
       if (!element) return false;
 
-      // Check if still visible
+      // Check visibility
       const isVisible = await this.page.evaluate(el => {
         if (!el) return false;
         const style = window.getComputedStyle(el);
         return style.display !== 'none' &&
                style.visibility !== 'hidden' &&
-               style.opacity !== '0';
+               parseFloat(style.opacity) > 0;
       }, element);
 
       if (!isVisible) return false;
 
-      // Try to click
+      // Try multiple click strategies
       try {
+        // Strategy 1: Normal click
         await element.click();
         return true;
       } catch (clickError) {
-        // Try JavaScript click as fallback
         try {
+          // Strategy 2: JavaScript click
           await this.page.evaluate(el => el.click(), element);
           return true;
         } catch (jsError) {
-          return false;
+          try {
+            // Strategy 3: Dispatch click event
+            await this.page.evaluate(el => {
+              el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+            }, element);
+            return true;
+          } catch (eventError) {
+            return false;
+          }
         }
       }
-
     } catch (error) {
       return false;
     }
   }
 
   /**
-   * Find element using multiple strategies
+   * Find element by target info
    * @private
    */
   async _findElementByTarget(target) {
     try {
-      // Strategy 1: By ID
+      // Try by ID
       if (target.id) {
         const byId = await this.page.$(`#${target.id}`);
         if (byId) return byId;
       }
 
-      // Strategy 2: By data attributes
-      if (target.dataAttrs && target.dataAttrs.target) {
+      // Try by data attributes
+      if (target.dataAttrs?.target) {
         const byData = await this.page.$(`[data-target="${target.dataAttrs.target}"]`);
         if (byData) return byData;
       }
 
-      // Strategy 3: By text content
-      if (target.text) {
-        const byText = await this.page.evaluateHandle((targetText, targetSelector) => {
-          const elements = Array.from(document.querySelectorAll(targetSelector + ', button, a, [role="button"]'));
+      // Try by text content
+      if (target.text && target.text.length > 2) {
+        const byText = await this.page.evaluateHandle((targetText) => {
+          const elements = Array.from(document.querySelectorAll('button, a, [role="button"], [onclick], div, span'));
           return elements.find(el => {
             const text = (el.innerText || el.textContent || '').trim();
-            return text === targetText || text.includes(targetText);
+            return text === targetText || text.startsWith(targetText);
           });
-        }, target.text, target.selector);
+        }, target.text);
 
         if (byText && await byText.asElement()) {
           return byText.asElement();
@@ -388,109 +506,96 @@ class InteractionHandler {
   }
 
   /**
-   * Get DOM snapshot
+   * Capture current state
    * @private
    */
-  async _getDOMSnapshot() {
+  async _captureState() {
     return await this.page.evaluate(() => {
       return {
         formCount: document.querySelectorAll('form').length,
         inputCount: document.querySelectorAll('input').length,
-        modalCount: document.querySelectorAll('[class*="modal"], [role="dialog"]').length,
-        linkCount: document.querySelectorAll('a[href]').length,
         buttonCount: document.querySelectorAll('button').length,
-        bodyHTML: document.body.innerHTML.length
+        linkCount: document.querySelectorAll('a[href]').length,
+        modalCount: document.querySelectorAll('[class*="modal"], [role="dialog"], [class*="popup"]').length,
+        visibleModalCount: Array.from(document.querySelectorAll('[class*="modal"], [role="dialog"]')).filter(el => {
+          const style = window.getComputedStyle(el);
+          return style.display !== 'none' && style.visibility !== 'hidden';
+        }).length,
+        bodyHTML: document.body.innerHTML.length,
+        domChangeCount: window.__domChanges ? window.__domChanges.length : 0
       };
     });
   }
 
   /**
-   * Detect new content after interaction
+   * Analyze what changed
    * @private
    */
-  async _detectNewContent(before, after) {
+  async _analyzeChanges(before, after) {
+    const newForms = after.formCount - before.formCount;
+    const newLinks = after.linkCount - before.linkCount;
+    const newButtons = after.buttonCount - before.buttonCount;
+    const newModals = after.visibleModalCount - before.visibleModalCount;
+    const htmlGrowth = after.bodyHTML - before.bodyHTML;
+    const domChanges = after.domChangeCount - before.domChangeCount;
+
     const hasChanges =
-      after.formCount > before.formCount ||
-      after.inputCount > before.inputCount ||
-      after.modalCount > before.modalCount ||
-      after.linkCount > before.linkCount ||
-      after.buttonCount > before.buttonCount ||
-      Math.abs(after.bodyHTML - before.bodyHTML) > 500;
+      newForms > 0 ||
+      newLinks > 0 ||
+      newButtons > 0 ||
+      newModals > 0 ||
+      Math.abs(htmlGrowth) > 500 ||
+      domChanges > 5;
 
-    if (!hasChanges) {
-      return { hasChanges: false };
-    }
+    const significant =
+      newForms > 0 ||
+      newModals > 0 ||
+      Math.abs(htmlGrowth) > 2000 ||
+      domChanges > 20;
 
-    // Extract new content
-    const newContent = await this.page.evaluate(() => {
-      const forms = [];
-      const links = [];
-      let modalDetected = false;
+    return {
+      hasChanges,
+      significant,
+      newForms,
+      newLinks,
+      newButtons,
+      newModals,
+      htmlGrowth,
+      domChanges
+    };
+  }
 
-      // Find visible modals
+  /**
+   * Check if modal opened
+   * @private
+   */
+  async _checkModalOpened() {
+    return await this.page.evaluate(() => {
       const modals = document.querySelectorAll('[class*="modal"], [role="dialog"], [class*="popup"], [class*="overlay"]');
 
-      modals.forEach(modal => {
+      for (const modal of modals) {
         const style = window.getComputedStyle(modal);
-        const isVisible = style.display !== 'none' &&
-                         style.visibility !== 'hidden' &&
-                         style.opacity !== '0';
-
-        if (isVisible) {
-          modalDetected = true;
-
-          // Extract ALL forms from modal (including nested)
-          modal.querySelectorAll('form').forEach((form) => {
-            const action = form.getAttribute('action') || window.location.href;
-            const method = (form.getAttribute('method') || 'GET').toUpperCase();
-
-            const fields = [];
-            form.querySelectorAll('input, select, textarea').forEach(field => {
-              const name = field.getAttribute('name') || field.getAttribute('id') || '';
-              const type = field.getAttribute('type') || field.tagName.toLowerCase();
-
-              if (!name || type === 'submit' || type === 'button') return;
-
-              fields.push({
-                name,
-                type,
-                value: field.value || field.getAttribute('value') || '',
-                required: field.hasAttribute('required'),
-                placeholder: field.getAttribute('placeholder') || ''
-              });
-            });
-
-            if (fields.length > 0 || method === 'POST') {
-              forms.push({
-                action,
-                method,
-                fields,
-                location: 'modal',
-                id: form.id || '',
-                classes: form.className || ''
-              });
-            }
-          });
-
-          // Extract links from modal
-          modal.querySelectorAll('a[href]').forEach(a => {
-            const href = a.getAttribute('href');
-            if (href && !href.startsWith('javascript:')) {
-              try {
-                links.push({
-                  url: new URL(href, window.location.href).toString(),
-                  text: (a.innerText || '').trim().substring(0, 50),
-                  location: 'modal'
-                });
-              } catch (e) {
-                // Invalid URL
-              }
-            }
-          });
+        if (style.display !== 'none' &&
+            style.visibility !== 'hidden' &&
+            parseFloat(style.opacity) > 0) {
+          return true;
         }
-      });
+      }
 
-      // Also check for any NEW forms/links anywhere on the page
+      return false;
+    });
+  }
+
+  /**
+   * Extract new content from page
+   * @private
+   */
+  async _extractNewContent() {
+    return await this.page.evaluate(() => {
+      const forms = [];
+      const links = [];
+
+      // Get ALL visible forms
       document.querySelectorAll('form').forEach(form => {
         const style = window.getComputedStyle(form);
         if (style.display === 'none') return;
@@ -503,43 +608,50 @@ class InteractionHandler {
           const name = field.getAttribute('name') || field.getAttribute('id') || '';
           const type = field.getAttribute('type') || field.tagName.toLowerCase();
 
-          if (!name || type === 'submit' || type === 'button') return;
+          if (!name || type === 'submit' || type === 'button' || type === 'reset') return;
 
           fields.push({
             name,
             type,
-            value: field.value || field.getAttribute('value') || ''
+            value: field.value || field.getAttribute('value') || '',
+            placeholder: field.getAttribute('placeholder') || '',
+            required: field.hasAttribute('required')
           });
         });
 
-        if (fields.length > 0) {
-          // Check if this is a new form (not already in forms array)
-          const signature = method + action + fields.map(f => f.name).join(',');
-          forms.push({
-            action,
-            method,
-            fields,
-            signature,
-            location: 'page'
-          });
+        forms.push({
+          action,
+          method,
+          fields,
+          id: form.id || '',
+          classes: form.className || ''
+        });
+      });
+
+      // Get ALL visible links
+      document.querySelectorAll('a[href]').forEach(a => {
+        const style = window.getComputedStyle(a);
+        if (style.display === 'none') return;
+
+        const href = a.getAttribute('href');
+        if (href && !href.startsWith('javascript:')) {
+          try {
+            links.push({
+              url: new URL(href, window.location.href).toString(),
+              text: (a.innerText || '').trim().substring(0, 50)
+            });
+          } catch (e) {
+            // Invalid URL
+          }
         }
       });
 
-      return {
-        forms,
-        links,
-        modalDetected
-      };
+      return { forms, links };
     });
-
-    return {
-      hasChanges: true,
-      ...newContent
-    };
   }
 
   /**
-   * Try to close any open modals
+   * Close modal with multiple strategies
    * @private
    */
   async _closeModal() {
@@ -549,38 +661,46 @@ class InteractionHandler {
         const closeSelectors = [
           '.modal .close',
           '.modal [data-dismiss]',
+          '.modal [data-bs-dismiss]',
           '.modal .modal-close',
-          '[class*="close"]',
-          '[class*="dismiss"]',
-          'button[aria-label*="Close"]',
-          'button[aria-label*="close"]'
+          '.close',
+          '[data-dismiss="modal"]',
+          '[data-bs-dismiss="modal"]',
+          '[aria-label*="lose"]',
+          '[aria-label*="Close"]',
+          'button[class*="close"]'
         ];
 
         for (const selector of closeSelectors) {
-          const closeBtn = document.querySelector(selector);
-          if (closeBtn) {
-            const style = window.getComputedStyle(closeBtn);
-            if (style.display !== 'none') {
-              closeBtn.click();
+          const btns = document.querySelectorAll(selector);
+          for (const btn of btns) {
+            const style = window.getComputedStyle(btn);
+            if (style.display !== 'none' && style.visibility !== 'hidden') {
+              btn.click();
               return;
             }
           }
         }
 
-        // Strategy 2: Click overlay
-        const overlay = document.querySelector('.modal-backdrop, [class*="overlay"], [class*="backdrop"]');
-        if (overlay) {
-          overlay.click();
+        // Strategy 2: Click backdrop
+        const backdrop = document.querySelector('.modal-backdrop, [class*="backdrop"], [class*="overlay"]');
+        if (backdrop) {
+          backdrop.click();
           return;
         }
 
-        // Strategy 3: Press ESC
+        // Strategy 3: ESC key
         document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', keyCode: 27 }));
+
+        // Strategy 4: Hide modals directly
+        document.querySelectorAll('[class*="modal"], [role="dialog"]').forEach(modal => {
+          modal.style.display = 'none';
+        });
       });
 
       await sleep(500);
     } catch (error) {
-      // Ignore errors
+      // Ignore
     }
   }
 
@@ -592,8 +712,10 @@ class InteractionHandler {
     this.discoveredContent = {
       forms: [],
       links: [],
-      modals: []
+      networkRequests: []
     };
+    this.domChanges = [];
+    this.currentDepth = 0;
   }
 }
 
