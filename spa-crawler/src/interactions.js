@@ -24,9 +24,14 @@ class InteractionHandler {
       maxInteractionDepth: options.maxInteractionDepth || 10,
       maxClicksPerPage: options.maxClicksPerPage || 200,
       maxPassesPerElement: options.maxPassesPerElement || 2,
-      waitAfterClick: options.waitAfterClick || 2000,
-      waitForDelayedContent: options.waitForDelayedContent || 3000,
-      waitForNetworkIdle: options.waitForNetworkIdle || 3000,
+      // PERFORMANCE: Reduced wait times
+      waitAfterClick: options.waitAfterClick || 500,          // 2000 → 500ms
+      waitForDelayedContent: options.waitForDelayedContent || 1000, // 3000 → 1000ms
+      waitForNetworkIdle: options.waitForNetworkIdle || 1000, // 3000 → 1000ms
+      // PERFORMANCE: Batch interactions
+      batchSize: options.batchSize || 5,                      // NEW: Click 5 elements concurrently
+      batchWait: options.batchWait || 2000,                   // NEW: Wait after batch
+      enableParallel: options.enableParallel !== false,       // NEW: Enable parallel interactions
       enableMultiplePasses: options.enableMultiplePasses !== false,
       enableFormInteraction: options.enableFormInteraction !== false,
       enableKeyboardEvents: options.enableKeyboardEvents !== false,
@@ -201,45 +206,123 @@ class InteractionHandler {
 
     console.log(`      [INSANE-DEEP] 📊 Depth ${depth}: ${interactiveElements.length} interactive + ${closeButtons.length} close buttons`);
 
-    // Interact with non-close elements FIRST
-    for (let i = 0; i < interactiveElements.length && this.totalInteractions < this.options.maxClicksPerPage; i++) {
-      const element = interactiveElements[i];
+    // Use parallel processing if enabled
+    if (this.options.enableParallel) {
+      await this._interactWithElementsParallel(interactiveElements, depth);
+    } else {
+      await this._interactWithElementsSequential(interactiveElements, depth);
+    }
+  }
 
-      // Check if we've already interacted with this element
+  /**
+   * Interact with elements in PARALLEL (FAST!)
+   * @private
+   */
+  async _interactWithElementsParallel(elements, depth) {
+    const beforeState = await this._captureState();
+    const beforeNetworkCount = this.networkRequests.length;
+
+    // Process in batches
+    for (let batchStart = 0; batchStart < elements.length && this.totalInteractions < this.options.maxClicksPerPage; batchStart += this.options.batchSize) {
+      const batch = elements.slice(batchStart, batchStart + this.options.batchSize);
+
+      console.log(`      [INSANE-DEEP] ⚡ Depth ${depth}: Processing batch ${Math.floor(batchStart / this.options.batchSize) + 1} (${batch.length} elements in parallel)...`);
+
+      // Click all elements in batch CONCURRENTLY
+      const interactions = batch.map(async (element, idx) => {
+        const passCount = this.clickedElements.get(element.signature) || 0;
+        if (passCount >= this.options.maxPassesPerElement) {
+          return null; // Skip
+        }
+
+        try {
+          // Quick interaction (no individual waits)
+          await this._performAllInteractions(element);
+
+          // Mark as interacted
+          this.clickedElements.set(element.signature, passCount + 1);
+          this.totalInteractions++;
+
+          return { element, success: true };
+        } catch (error) {
+          return { element, success: false, error: error.message };
+        }
+      });
+
+      // Wait for all interactions in batch to complete
+      await Promise.all(interactions);
+
+      // Wait ONCE after batch (instead of after each element)
+      await sleep(this.options.batchWait);
+      await this._waitForNetworkIdle();
+    }
+
+    // Check changes ONCE after all batches
+    const afterState = await this._captureState();
+    const afterNetworkCount = this.networkRequests.length;
+    const changes = await this._analyzeChanges(beforeState, afterState);
+    const newNetworkRequests = afterNetworkCount - beforeNetworkCount;
+
+    if (changes.hasChanges || newNetworkRequests > 0) {
+      console.log(`      [INSANE-DEEP] ✨ Depth ${depth}: BATCH CHANGES DETECTED!`);
+      console.log(`      [INSANE-DEEP]    + ${changes.newForms} forms, + ${changes.newLinks} links, + ${changes.newButtons} buttons, + ${newNetworkRequests} requests`);
+
+      // Extract new content
+      const newContent = await this._extractAllContent();
+
+      if (newContent.forms.length > 0) {
+        console.log(`      [INSANE-DEEP] 📋 Found ${newContent.forms.length} new forms!`);
+        this.discoveredContent.forms.push(...newContent.forms);
+      }
+
+      if (newContent.links.length > 0) {
+        console.log(`      [INSANE-DEEP] 🔗 Found ${newContent.links.length} new links!`);
+        this.discoveredContent.links.push(...newContent.links);
+      }
+
+      // Check if modal opened
+      const modalOpened = await this._checkModalOpened(beforeState);
+      if (modalOpened) {
+        console.log(`      [INSANE-DEEP] 🪟 NEW Modal opened! Going DEEPER...`);
+        await this._recursiveInteraction(depth + 1);
+        await sleep(500);
+      } else if (changes.significant) {
+        console.log(`      [INSANE-DEEP] 🌊 Significant changes! Going DEEPER...`);
+        await this._recursiveInteraction(depth + 1);
+      }
+    }
+  }
+
+  /**
+   * Interact with elements SEQUENTIALLY (original method, kept for compatibility)
+   * @private
+   */
+  async _interactWithElementsSequential(elements, depth) {
+    for (let i = 0; i < elements.length && this.totalInteractions < this.options.maxClicksPerPage; i++) {
+      const element = elements[i];
       const passCount = this.clickedElements.get(element.signature) || 0;
 
       if (passCount >= this.options.maxPassesPerElement) {
-        continue; // Already tried enough times
+        continue;
       }
 
       try {
-        console.log(`      [INSANE-DEEP] 💥 Depth ${depth}: Element ${i + 1}/${interactiveElements.length} (pass ${passCount + 1}): "${element.text?.substring(0, 40)}"`);
+        console.log(`      [INSANE-DEEP] 💥 Depth ${depth}: Element ${i + 1}/${elements.length} (pass ${passCount + 1}): "${element.text?.substring(0, 40)}"`);
 
-        // Capture state before
         const beforeState = await this._captureState();
         const beforeNetworkCount = this.networkRequests.length;
 
-        // PERFORM MULTIPLE TYPES OF INTERACTIONS
         await this._performAllInteractions(element);
-
-        // Wait for immediate changes
         await sleep(this.options.waitAfterClick);
-
-        // Wait for network idle
         await this._waitForNetworkIdle();
-
-        // Wait for delayed content (animations, async operations)
         await sleep(this.options.waitForDelayedContent);
 
-        // Capture state after
         const afterState = await this._captureState();
         const afterNetworkCount = this.networkRequests.length;
 
-        // Mark as interacted
         this.clickedElements.set(element.signature, passCount + 1);
         this.totalInteractions++;
 
-        // Analyze changes
         const changes = await this._analyzeChanges(beforeState, afterState);
         const newNetworkRequests = afterNetworkCount - beforeNetworkCount;
 
@@ -247,7 +330,6 @@ class InteractionHandler {
           console.log(`      [INSANE-DEEP] ✨ Depth ${depth}: CHANGES DETECTED!`);
           console.log(`      [INSANE-DEEP]    + ${changes.newForms} forms, + ${changes.newLinks} links, + ${changes.newButtons} buttons, + ${newNetworkRequests} requests`);
 
-          // Extract new content
           const newContent = await this._extractAllContent();
 
           if (newContent.forms.length > 0) {
@@ -260,20 +342,16 @@ class InteractionHandler {
             this.discoveredContent.links.push(...newContent.links);
           }
 
-          // Check if modal/dialog opened (compare before/after modal count)
           const modalOpened = await this._checkModalOpened(beforeState);
-
           if (modalOpened) {
             console.log(`      [INSANE-DEEP] 🪟 NEW Modal opened! Going DEEPER...`);
             await this._recursiveInteraction(depth + 1);
-            // Don't close modal yet - explore it first, then let parent close it
             await sleep(500);
           } else if (changes.significant) {
             console.log(`      [INSANE-DEEP] 🌊 Significant changes! Going DEEPER...`);
             await this._recursiveInteraction(depth + 1);
           }
         }
-
       } catch (error) {
         console.log(`      [INSANE-DEEP] ❌ Depth ${depth}: Error: ${error.message}`);
         continue;
