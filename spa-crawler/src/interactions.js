@@ -16,10 +16,14 @@
  */
 
 const { sleep } = require('./utils');
+const FrameworkDetector = require('./framework-detector');
+const AdvancedDiscovery = require('./advanced-discovery');
 
 class InteractionHandler {
   constructor(page, options = {}) {
     this.page = page;
+    this.frameworkDetector = new FrameworkDetector(page);
+    this.advancedDiscovery = new AdvancedDiscovery(page, options);
     this.options = {
       maxInteractionDepth: options.maxInteractionDepth || 10,
       maxClicksPerPage: options.maxClicksPerPage || 200,
@@ -61,44 +65,17 @@ class InteractionHandler {
   }
 
   /**
-   * Wait for SPA framework to fully render
+   * Wait for SPA framework to fully render - ENHANCED with framework detection
    * @private
    */
   async _waitForSPAToRender() {
     try {
-      console.log(`      [INSANE-DEEP] ⏳ Waiting for SPA to render...`);
+      // Detect framework
+      await this.frameworkDetector.detect();
 
-      // Wait for network idle first
-      await this.page.waitForNetworkIdle({ timeout: 5000, idleTime: 500 }).catch(() => {});
+      // Use framework-specific waiting
+      await this.frameworkDetector.waitForStable();
 
-      // Wait for frameworks to stabilize
-      await this.page.evaluate(async () => {
-        // Wait for Angular
-        if (window.getAllAngularTestabilities) {
-          try {
-            const testabilities = window.getAllAngularTestabilities();
-            if (testabilities && testabilities.length > 0) {
-              await Promise.race([
-                Promise.all(testabilities.map(testability =>
-                  new Promise(resolve => {
-                    try {
-                      testability.whenStable(() => resolve());
-                    } catch (e) {
-                      resolve();
-                    }
-                  })
-                )),
-                new Promise(r => setTimeout(r, 3000)) // Max 3s wait
-              ]);
-            }
-          } catch (e) {}
-        }
-
-        // Wait for any pending animations/timeouts
-        await new Promise(r => setTimeout(r, 2000));
-      });
-
-      console.log(`      [INSANE-DEEP] ✅ SPA render complete`);
     } catch (e) {
       console.log(`      [INSANE-DEEP] ⚠️  Render wait error: ${e.message}`);
     }
@@ -113,6 +90,16 @@ class InteractionHandler {
 
     // Wait for SPA to fully render
     await this._waitForSPAToRender();
+
+    // ADVANCED: Discover client-side routes
+    const routes = await this.frameworkDetector.discoverRoutes();
+    if (routes.length > 0) {
+      console.log(`      [ROUTES] Discovered ${routes.length} client-side routes`);
+      // Note: Routes can be returned for the main crawler to visit
+    }
+
+    // ADVANCED: Run comprehensive discovery (infinite scroll, iframes, lazy loading)
+    const advancedResults = await this.advancedDiscovery.discoverAll();
 
     // Set up comprehensive monitoring
     await this._setupComprehensiveMonitoring();
@@ -137,6 +124,10 @@ class InteractionHandler {
     console.log(`      [INSANE-DEEP]    Endpoints: ${this.discoveredContent.endpoints.size}`);
     console.log(`      [INSANE-DEEP]    MIME types: ${this.discoveredContent.mimeTypes.size}`);
     console.log(`      [INSANE-DEEP]    Max depth: ${this.currentDepth}`);
+    console.log(`      [INSANE-DEEP]    Routes discovered: ${routes.length}`);
+    console.log(`      [INSANE-DEEP]    Scroll items loaded: ${advancedResults.infiniteScroll.loaded}`);
+    console.log(`      [INSANE-DEEP]    Iframes crawled: ${advancedResults.iframes.length}`);
+    console.log(`      [INSANE-DEEP]    Lazy chunks: ${advancedResults.lazyLoading.chunks}`);
 
     return {
       clickCount: this.clickedElements.size,
@@ -146,7 +137,13 @@ class InteractionHandler {
         endpoints: Array.from(this.discoveredContent.endpoints),
         mimeTypes: Object.fromEntries(this.discoveredContent.mimeTypes)
       },
-      maxDepthReached: this.currentDepth
+      maxDepthReached: this.currentDepth,
+      // ADVANCED DISCOVERY RESULTS
+      routes: routes,
+      infiniteScroll: advancedResults.infiniteScroll,
+      iframes: advancedResults.iframes,
+      lazyLoading: advancedResults.lazyLoading,
+      framework: this.frameworkDetector.framework
     };
   }
 
