@@ -13,16 +13,16 @@ async function main() {
     startUrl: 'http://angular.testsparker.com/',
     maxDepth: 3,
     maxPages: 20,
-    timeout: 60000,                // 60s timeout for complex interactions
+    timeout: 120000,               // 2min timeout for INSANE interactions
     waitForRequests: 3000,
     scope: 'domain',
     headless: true,
     deduplication: true,
     extractForms: true,
     extractClickables: true,
-    interactWithPage: true,        // Enable ULTRA-DEEP recursive interaction
-    maxClicksPerPage: 100,         // Try up to 100 elements per page
-    waitAfterClick: 1500           // Wait 1.5s after each click
+    interactWithPage: true,        // Enable INSANELY DEEP mode
+    maxClicksPerPage: 200,         // Try up to 200 interactions per page
+    waitAfterClick: 2000           // Wait 2s after each interaction
     // executablePath: '/path/to/chrome'  // Optional: specify custom Chrome path
   });
 
