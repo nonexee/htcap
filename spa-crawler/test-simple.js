@@ -11,7 +11,7 @@ async function main() {
     console.log('Launching browser...');
     const browser = await puppeteer.launch({
       headless: true,
-      executablePath: '/tmp/chromium/chrome-linux/chrome',
+      // executablePath: '/path/to/chrome',  // Optional: specify custom Chrome path
       args: [
         '--no-sandbox',
         '--disable-setuid-sandbox',

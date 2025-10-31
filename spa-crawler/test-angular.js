@@ -19,8 +19,8 @@ async function main() {
     headless: true,
     deduplication: true,
     extractForms: true,
-    extractClickables: true,
-    executablePath: '/tmp/chromium/chrome-linux/chrome'
+    extractClickables: true
+    // executablePath: '/path/to/chrome'  // Optional: specify custom Chrome path
   });
 
   // Track progress

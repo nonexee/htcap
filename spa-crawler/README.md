@@ -19,6 +19,11 @@ A framework-agnostic, Node.js-based crawler specifically designed for Single Pag
 npm install
 ```
 
+**Note:** Puppeteer will automatically download a compatible version of Chromium (~170MB) during installation. If you're behind a firewall or want to use a different Chrome/Chromium binary, you can:
+
+1. Skip the download: `PUPPETEER_SKIP_DOWNLOAD=true npm install`
+2. Use a custom browser by setting `executablePath` in the crawler options (see Browser Options below)
+
 ## Quick Start
 
 ```javascript
@@ -86,6 +91,7 @@ console.log(`Visited ${results.stats.pagesVisited} pages`);
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `headless` | boolean | true | Run browser in headless mode |
+| `executablePath` | string | null | Path to custom Chrome/Chromium binary (optional) |
 | `viewport` | object | {width: 1920, height: 1080} | Browser viewport size |
 
 ### Deduplication
