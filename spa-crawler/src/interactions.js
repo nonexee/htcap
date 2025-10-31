@@ -51,6 +51,8 @@ class InteractionHandler {
     this.domChanges = [];
     this.currentDepth = 0;
     this.totalInteractions = 0;
+    this.totalElementsFound = 0; // Total including duplicates
+    this.deduplicatedCount = 0;  // How many were skipped as duplicates
   }
 
   /**
@@ -116,9 +118,15 @@ class InteractionHandler {
     // Clean up
     await this._teardownMonitoring();
 
+    const deduplicationRate = this.totalElementsFound > 0
+      ? ((this.deduplicatedCount / this.totalElementsFound) * 100).toFixed(1)
+      : 0;
+
     console.log(`      [INSANE-DEEP] 📊 FINAL STATS:`);
     console.log(`      [INSANE-DEEP]    Total interactions: ${this.totalInteractions}`);
     console.log(`      [INSANE-DEEP]    Unique elements: ${this.clickedElements.size}`);
+    console.log(`      [INSANE-DEEP]    Total elements found: ${this.totalElementsFound}`);
+    console.log(`      [INSANE-DEEP]    Deduplicated: ${this.deduplicatedCount} (${deduplicationRate}% efficiency)`);
     console.log(`      [INSANE-DEEP]    Forms found: ${this.discoveredContent.forms.length}`);
     console.log(`      [INSANE-DEEP]    Links found: ${this.discoveredContent.links.length}`);
     console.log(`      [INSANE-DEEP]    Endpoints: ${this.discoveredContent.endpoints.size}`);
@@ -157,7 +165,16 @@ class InteractionHandler {
 
     // Find ALL interactive elements
     let elements = await this._findAllInteractiveElements();
-    console.log(`      [INSANE-DEEP] 🔍 Depth ${depth}: Found ${elements.length} elements`);
+
+    // Track totals for deduplication statistics
+    this.totalElementsFound += elements.length;
+
+    // Count how many are already interacted with (deduplication stats)
+    const newElements = elements.filter(e => !this.clickedElements.has(e.signature));
+    const alreadySeen = elements.length - newElements.length;
+    this.deduplicatedCount += alreadySeen;
+
+    console.log(`      [INSANE-DEEP] 🔍 Depth ${depth}: Found ${elements.length} elements (${newElements.length} new, ${alreadySeen} deduplicated)`);
 
     if (elements.length === 0) {
       console.log(`      [INSANE-DEEP] ✋ Depth ${depth}: No elements, returning`);
@@ -1039,16 +1056,66 @@ class InteractionHandler {
         return true;
       };
 
+      // Generate robust signature that doesn't change with dynamic attributes
+      const generateSignature = (el) => {
+        // Use stable identifiers
+        const id = el.id || '';
+        const name = el.getAttribute('name') || '';
+        const type = el.getAttribute('type') || '';
+        const href = el.getAttribute('href') || '';
+        const tag = el.tagName;
+
+        // Get position in DOM (parent path to avoid duplicates)
+        let domPath = tag;
+        let parent = el.parentElement;
+        let depth = 0;
+        while (parent && depth < 3) { // Track 3 levels up
+          domPath = parent.tagName + '>' + domPath;
+          if (parent.id) {
+            domPath = '#' + parent.id + '>' + domPath;
+            break; // ID is unique, stop here
+          }
+          parent = parent.parentElement;
+          depth++;
+        }
+
+        // Get stable text content (first 30 chars, normalized)
+        const text = (el.innerText || el.textContent || '').trim().substring(0, 30).replace(/\s+/g, ' ');
+
+        // Combine stable attributes (ignore dynamic ones like class, aria-expanded, etc.)
+        const stableSignature = [
+          domPath,
+          id,
+          name,
+          type,
+          href,
+          text,
+          // Include position among siblings with same tag
+          Array.from(el.parentElement?.children || [])
+            .filter(c => c.tagName === el.tagName)
+            .indexOf(el)
+        ].join('|');
+
+        // Create a simple hash for efficiency
+        let hash = 0;
+        for (let i = 0; i < stableSignature.length; i++) {
+          const char = stableSignature.charCodeAt(i);
+          hash = ((hash << 5) - hash) + char;
+          hash = hash & hash; // Convert to 32-bit integer
+        }
+
+        return 'sig_' + hash + '_' + tag + (id ? '_' + id : '');
+      };
+
       const addElement = (el) => {
         if (!isInteractive(el)) return;
 
-        const signature =
-          el.outerHTML.substring(0, 200) +
-          (el.id || '') +
-          (el.className || '') +
-          el.tagName;
+        const signature = generateSignature(el);
 
-        if (seen.has(signature)) return;
+        if (seen.has(signature)) {
+          // Element already found - deduplication working!
+          return;
+        }
         seen.add(signature);
 
         const text = (
@@ -1359,6 +1426,8 @@ class InteractionHandler {
     this.domChanges = [];
     this.currentDepth = 0;
     this.totalInteractions = 0;
+    this.totalElementsFound = 0;
+    this.deduplicatedCount = 0;
   }
 }
 
