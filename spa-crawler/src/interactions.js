@@ -117,9 +117,29 @@ class InteractionHandler {
       return;
     }
 
-    // Interact with EVERY element
-    for (let i = 0; i < elements.length && this.totalInteractions < this.options.maxClicksPerPage; i++) {
-      const element = elements[i];
+    // Separate close buttons from other elements
+    const closeButtons = [];
+    const interactiveElements = [];
+
+    for (const el of elements) {
+      const isCloseButton =
+        /^(×|x|close|dismiss|cancel)$/i.test(el.text?.trim()) ||
+        el.classes?.includes('close') ||
+        el.classes?.includes('dismiss') ||
+        el.dataAttrs?.dismiss;
+
+      if (isCloseButton) {
+        closeButtons.push(el);
+      } else {
+        interactiveElements.push(el);
+      }
+    }
+
+    console.log(`      [INSANE-DEEP] 📊 Depth ${depth}: ${interactiveElements.length} interactive + ${closeButtons.length} close buttons`);
+
+    // Interact with non-close elements FIRST
+    for (let i = 0; i < interactiveElements.length && this.totalInteractions < this.options.maxClicksPerPage; i++) {
+      const element = interactiveElements[i];
 
       // Check if we've already interacted with this element
       const passCount = this.clickedElements.get(element.signature) || 0;
@@ -129,7 +149,7 @@ class InteractionHandler {
       }
 
       try {
-        console.log(`      [INSANE-DEEP] 💥 Depth ${depth}: Element ${i + 1}/${elements.length} (pass ${passCount + 1}): "${element.text?.substring(0, 40)}"`);
+        console.log(`      [INSANE-DEEP] 💥 Depth ${depth}: Element ${i + 1}/${interactiveElements.length} (pass ${passCount + 1}): "${element.text?.substring(0, 40)}"`);
 
         // Capture state before
         const beforeState = await this._captureState();
@@ -176,14 +196,14 @@ class InteractionHandler {
             this.discoveredContent.links.push(...newContent.links);
           }
 
-          // Check if modal/dialog opened
-          const modalOpened = await this._checkModalOpened();
+          // Check if modal/dialog opened (compare before/after modal count)
+          const modalOpened = await this._checkModalOpened(beforeState);
 
           if (modalOpened) {
-            console.log(`      [INSANE-DEEP] 🪟 Modal opened! Going DEEPER...`);
+            console.log(`      [INSANE-DEEP] 🪟 NEW Modal opened! Going DEEPER...`);
             await this._recursiveInteraction(depth + 1);
-            await this._closeModal();
-            await sleep(1000);
+            // Don't close modal yet - explore it first, then let parent close it
+            await sleep(500);
           } else if (changes.significant) {
             console.log(`      [INSANE-DEEP] 🌊 Significant changes! Going DEEPER...`);
             await this._recursiveInteraction(depth + 1);
@@ -205,6 +225,13 @@ class InteractionHandler {
         console.log(`      [INSANE-DEEP] 🔄 Depth ${depth}: Found ${untriedElements.length} NEW elements! Rescanning...`);
         await this._recursiveInteraction(depth);
       }
+    }
+
+    // Close any modals opened at this depth before returning
+    if (depth > 0) {
+      console.log(`      [INSANE-DEEP] 🚪 Depth ${depth}: Closing modal at this depth...`);
+      await this._closeModal();
+      await sleep(500);
     }
 
     console.log(`      [INSANE-DEEP] ✅ Depth ${depth}: Completed round`);
@@ -665,21 +692,27 @@ class InteractionHandler {
   }
 
   /**
-   * Check if modal opened
+   * Check if modal opened (compares before/after state)
    * @private
    */
-  async _checkModalOpened() {
-    return await this.page.evaluate(() => {
-      const modals = document.querySelectorAll('[class*="modal"], [role="dialog"], [class*="popup"], [class*="overlay"]');
+  async _checkModalOpened(beforeState) {
+    return await this.page.evaluate((before) => {
+      const modals = document.querySelectorAll('[class*="modal"], [role="dialog"], [class*="popup"], [class*="overlay"], [class*="dialog"]');
+      const visibleModals = [];
+
       for (const modal of modals) {
         const style = window.getComputedStyle(modal);
         if (style.display !== 'none' && style.visibility !== 'hidden' &&
             parseFloat(style.opacity) > 0) {
-          return true;
+          // Create a signature for this modal
+          const signature = modal.id || modal.className || modal.outerHTML.substring(0, 100);
+          visibleModals.push(signature);
         }
       }
-      return false;
-    });
+
+      // Compare: if we have MORE visible modals now than before, a new one opened
+      return visibleModals.length > (before.visibleModalCount || 0);
+    }, beforeState);
   }
 
   /**
