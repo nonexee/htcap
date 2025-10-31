@@ -13,6 +13,7 @@
 const BrowserManager = require('./browser');
 const NetworkInterceptor = require('./interceptor');
 const Deduplicator = require('./deduplicator');
+const InteractionHandler = require('./interactions');
 const { extractLinks, extractForms, extractClickables, getPageInfo } = require('./extractor');
 const { normalizeUrl, isInScope, isExcluded, isValidUrl, sleep } = require('./utils');
 const EventEmitter = require('events');
@@ -44,6 +45,9 @@ class SPACrawler extends EventEmitter {
       deduplicationThreshold: options.deduplicationThreshold || 0.85,
       extractForms: options.extractForms !== false,
       extractClickables: options.extractClickables || false,
+      interactWithPage: options.interactWithPage || false,
+      maxClicksPerPage: options.maxClicksPerPage || 10,
+      waitAfterClick: options.waitAfterClick || 1000,
       followRedirects: options.followRedirects !== false,
       maxConcurrent: options.maxConcurrent || 1,
       respectRobotsTxt: options.respectRobotsTxt || false,
@@ -239,6 +243,32 @@ class SPACrawler extends EventEmitter {
       let clickables = [];
       if (this.config.extractClickables) {
         clickables = await extractClickables(page);
+      }
+
+      // Interact with page to discover hidden content (modals, etc.)
+      let interactionResults = null;
+      if (this.config.interactWithPage) {
+        const interactionHandler = new InteractionHandler(page, {
+          maxClicksPerPage: this.config.maxClicksPerPage,
+          waitAfterClick: this.config.waitAfterClick
+        });
+
+        interactionResults = await interactionHandler.interactWithPage();
+
+        // Merge discovered forms and links
+        if (interactionResults.discovered.forms.length > 0) {
+          forms.push(...interactionResults.discovered.forms);
+        }
+        if (interactionResults.discovered.links.length > 0) {
+          links.push(...interactionResults.discovered.links);
+        }
+
+        this.emit('interactionComplete', {
+          url,
+          clickCount: interactionResults.clickCount,
+          formsFound: interactionResults.discovered.forms.length,
+          linksFound: interactionResults.discovered.links.length
+        });
       }
 
       // Get network requests

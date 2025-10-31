@@ -19,7 +19,10 @@ async function main() {
     headless: true,
     deduplication: true,
     extractForms: true,
-    extractClickables: true
+    extractClickables: true,
+    interactWithPage: true,        // Enable clicking buttons/modals
+    maxClicksPerPage: 10,          // Click up to 10 elements per page
+    waitAfterClick: 1000           // Wait 1s after each click
     // executablePath: '/path/to/chrome'  // Optional: specify custom Chrome path
   });
 
@@ -53,6 +56,10 @@ async function main() {
   crawler.on('urlQueued', ({ url, depth }) => {
     const stats = crawler.getStats();
     console.log(`    [+] Queued: ${url} (queue: ${stats.queueSize})`);
+  });
+
+  crawler.on('interactionComplete', ({ url, clickCount, formsFound, linksFound }) => {
+    console.log(`    [INTERACT] Clicked ${clickCount} elements, found ${formsFound} hidden forms, ${linksFound} hidden links`);
   });
 
   crawler.on('error', (error) => {
