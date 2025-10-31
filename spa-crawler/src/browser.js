@@ -8,6 +8,7 @@ class BrowserManager {
   constructor(options = {}) {
     this.options = {
       headless: options.headless !== false, // Default: true
+      executablePath: options.executablePath || null, // Custom Chrome path
       args: options.args || [
         '--no-sandbox',
         '--disable-setuid-sandbox',

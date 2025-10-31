@@ -39,6 +39,7 @@ class SPACrawler extends EventEmitter {
       cookies: options.cookies || [],
       userAgent: options.userAgent || null,
       headless: options.headless !== false,
+      executablePath: options.executablePath || null,
       deduplication: options.deduplication !== false,
       deduplicationThreshold: options.deduplicationThreshold || 0.85,
       extractForms: options.extractForms !== false,
@@ -91,7 +92,8 @@ class SPACrawler extends EventEmitter {
         headless: this.config.headless,
         timeout: this.config.timeout,
         userAgent: this.config.userAgent,
-        viewport: this.config.viewport
+        viewport: this.config.viewport,
+        executablePath: this.config.executablePath
       });
 
       await this.browser.launch();
