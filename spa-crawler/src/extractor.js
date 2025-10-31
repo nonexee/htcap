@@ -179,28 +179,41 @@ async function extractClickables(page) {
       '[ng-click]',
       '[v-on:click]',
       '[data-action]',
-      '.btn:not([href])',
-      '.button:not([href])'
+      '.btn',
+      '.button'
     ];
 
-    const elements = document.querySelectorAll(selectors.join(','));
+    const seen = new Set();
 
-    elements.forEach((el, index) => {
-      // Skip if it's already an <a> tag (handled in links)
-      if (el.tagName === 'A') return;
+    // Query each selector individually to avoid complex selector errors
+    selectors.forEach(selector => {
+      try {
+        const elements = document.querySelectorAll(selector);
+        elements.forEach((el, index) => {
+          // Skip if it's already an <a> tag (handled in links)
+          if (el.tagName === 'A' && el.hasAttribute('href')) return;
 
-      const text = el.innerText?.trim().substring(0, 50) || '';
-      const id = el.id || '';
-      const classes = el.className || '';
+          // Use a unique identifier to avoid duplicates
+          const uniqueId = el.outerHTML.substring(0, 100);
+          if (seen.has(uniqueId)) return;
+          seen.add(uniqueId);
 
-      clickables.push({
-        type: 'clickable',
-        index,
-        text,
-        id,
-        classes: typeof classes === 'string' ? classes : '',
-        tagName: el.tagName.toLowerCase()
-      });
+          const text = el.innerText?.trim().substring(0, 50) || '';
+          const id = el.id || '';
+          const classes = el.className || '';
+
+          clickables.push({
+            type: 'clickable',
+            index: clickables.length,
+            text,
+            id,
+            classes: typeof classes === 'string' ? classes : '',
+            tagName: el.tagName.toLowerCase()
+          });
+        });
+      } catch (e) {
+        // Skip invalid selectors
+      }
     });
 
     return clickables;
