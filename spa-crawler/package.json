@@ -1,0 +1,31 @@
+{
+  "name": "spa-crawler",
+  "version": "1.0.0",
+  "description": "Framework-agnostic SPA crawler for discovering pages and requests in single-page applications",
+  "main": "src/index.js",
+  "keywords": [
+    "spa",
+    "crawler",
+    "single-page-application",
+    "puppeteer",
+    "web-scraping",
+    "react",
+    "vue",
+    "angular",
+    "ajax",
+    "fetch",
+    "websocket"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "puppeteer": "^21.0.0"
+  },
+  "engines": {
+    "node": ">=14.0.0"
+  },
+  "scripts": {
+    "example:basic": "node examples/basic.js",
+    "example:advanced": "node examples/advanced.js"
+  }
+}
