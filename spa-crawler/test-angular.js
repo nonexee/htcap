@@ -20,9 +20,9 @@ async function main() {
     deduplication: true,
     extractForms: true,
     extractClickables: true,
-    interactWithPage: true,        // Enable clicking buttons/modals
-    maxClicksPerPage: 10,          // Click up to 10 elements per page
-    waitAfterClick: 1000           // Wait 1s after each click
+    interactWithPage: true,        // Enable aggressive interaction
+    maxClicksPerPage: 20,          // Click up to 20 elements per page
+    waitAfterClick: 1500           // Wait 1.5s after each click for content to load
     // executablePath: '/path/to/chrome'  // Optional: specify custom Chrome path
   });
 
