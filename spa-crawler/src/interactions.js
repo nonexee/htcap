@@ -212,10 +212,64 @@ class InteractionHandler {
   }
 
   /**
-   * Interact with elements in PARALLEL (FAST!)
+   * Interact with elements in HYBRID mode (FAST + THOROUGH!)
+   * Parallelizes safe elements, goes sequential for modal-triggering elements
    * @private
    */
   async _interactWithElementsParallel(elements, depth) {
+    console.log(`      [HYBRID-MODE] 🎯 Starting smart hybrid interaction...`);
+
+    // Categorize elements into safe (parallel) vs risky (sequential)
+    const safeElements = [];
+    const riskyElements = [];
+
+    for (const element of elements) {
+      const passCount = this.clickedElements.get(element.signature) || 0;
+      if (passCount >= this.options.maxPassesPerElement) {
+        continue;
+      }
+
+      // Risky elements that likely trigger modals/major changes
+      const isRisky =
+        element.text?.toLowerCase().includes('modal') ||
+        element.text?.toLowerCase().includes('open') ||
+        element.text?.toLowerCase().includes('show') ||
+        element.text?.toLowerCase().includes('dialog') ||
+        element.text?.toLowerCase().includes('popup') ||
+        element.dataAttrs?.toggle ||
+        element.dataAttrs?.target ||
+        element.dataAttrs?.modal ||
+        element.role === 'dialog' ||
+        element.classes?.includes('modal') ||
+        element.classes?.includes('dialog') ||
+        element.classes?.includes('popup');
+
+      if (isRisky) {
+        riskyElements.push(element);
+      } else {
+        safeElements.push(element);
+      }
+    }
+
+    console.log(`      [HYBRID-MODE] 📊 Categorized: ${safeElements.length} safe (parallel), ${riskyElements.length} risky (sequential)`);
+
+    // PHASE 1: Parallelize SAFE elements (forms, links, simple buttons)
+    if (safeElements.length > 0) {
+      await this._parallelBatchInteract(safeElements, depth);
+    }
+
+    // PHASE 2: Sequential for RISKY elements (modals, dialogs, accordions)
+    if (riskyElements.length > 0) {
+      console.log(`      [HYBRID-MODE] 🔄 Switching to sequential for ${riskyElements.length} risky elements...`);
+      await this._interactWithElementsSequential(riskyElements, depth);
+    }
+  }
+
+  /**
+   * Parallel batch interaction for safe elements
+   * @private
+   */
+  async _parallelBatchInteract(elements, depth) {
     const beforeState = await this._captureState();
     const beforeNetworkCount = this.networkRequests.length;
 
@@ -223,69 +277,56 @@ class InteractionHandler {
     for (let batchStart = 0; batchStart < elements.length && this.totalInteractions < this.options.maxClicksPerPage; batchStart += this.options.batchSize) {
       const batch = elements.slice(batchStart, batchStart + this.options.batchSize);
 
-      console.log(`      [INSANE-DEEP] ⚡ Depth ${depth}: Processing batch ${Math.floor(batchStart / this.options.batchSize) + 1} (${batch.length} elements in parallel)...`);
+      console.log(`      [PARALLEL] ⚡ Depth ${depth}: Batch ${Math.floor(batchStart / this.options.batchSize) + 1} (${batch.length} elements in parallel)...`);
 
       // Click all elements in batch CONCURRENTLY
-      const interactions = batch.map(async (element, idx) => {
+      const interactions = batch.map(async (element) => {
         const passCount = this.clickedElements.get(element.signature) || 0;
         if (passCount >= this.options.maxPassesPerElement) {
-          return null; // Skip
+          return null;
         }
 
         try {
-          // Quick interaction (no individual waits)
           await this._performAllInteractions(element);
-
-          // Mark as interacted
           this.clickedElements.set(element.signature, passCount + 1);
           this.totalInteractions++;
-
           return { element, success: true };
         } catch (error) {
           return { element, success: false, error: error.message };
         }
       });
 
-      // Wait for all interactions in batch to complete
       await Promise.all(interactions);
-
-      // Wait ONCE after batch (instead of after each element)
       await sleep(this.options.batchWait);
       await this._waitForNetworkIdle();
     }
 
-    // Check changes ONCE after all batches
+    // Check changes after parallel batches
     const afterState = await this._captureState();
     const afterNetworkCount = this.networkRequests.length;
     const changes = await this._analyzeChanges(beforeState, afterState);
     const newNetworkRequests = afterNetworkCount - beforeNetworkCount;
 
     if (changes.hasChanges || newNetworkRequests > 0) {
-      console.log(`      [INSANE-DEEP] ✨ Depth ${depth}: BATCH CHANGES DETECTED!`);
-      console.log(`      [INSANE-DEEP]    + ${changes.newForms} forms, + ${changes.newLinks} links, + ${changes.newButtons} buttons, + ${newNetworkRequests} requests`);
+      console.log(`      [PARALLEL] ✨ Batch changes: +${changes.newForms} forms, +${changes.newLinks} links, +${newNetworkRequests} requests`);
 
-      // Extract new content
       const newContent = await this._extractAllContent();
-
       if (newContent.forms.length > 0) {
-        console.log(`      [INSANE-DEEP] 📋 Found ${newContent.forms.length} new forms!`);
         this.discoveredContent.forms.push(...newContent.forms);
       }
-
       if (newContent.links.length > 0) {
-        console.log(`      [INSANE-DEEP] 🔗 Found ${newContent.links.length} new links!`);
         this.discoveredContent.links.push(...newContent.links);
       }
 
-      // Check if modal opened
-      const modalOpened = await this._checkModalOpened(beforeState);
-      if (modalOpened) {
-        console.log(`      [INSANE-DEEP] 🪟 NEW Modal opened! Going DEEPER...`);
-        await this._recursiveInteraction(depth + 1);
-        await sleep(500);
-      } else if (changes.significant) {
-        console.log(`      [INSANE-DEEP] 🌊 Significant changes! Going DEEPER...`);
-        await this._recursiveInteraction(depth + 1);
+      // If significant changes, rescan for NEW elements at CURRENT depth
+      if (changes.significant) {
+        console.log(`      [PARALLEL] 🔄 Significant changes detected, rescanning...`);
+        const newElements = await this._findAllInteractiveElements();
+        const untriedElements = newElements.filter(e => !this.clickedElements.has(e.signature));
+        if (untriedElements.length > 0) {
+          // Recursively process new elements at SAME depth
+          await this._interactWithElementsParallel(untriedElements, depth);
+        }
       }
     }
   }
