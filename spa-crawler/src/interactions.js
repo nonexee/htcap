@@ -37,6 +37,7 @@ class InteractionHandler {
       batchWait: options.batchWait || 2000,                   // NEW: Wait after batch
       enableParallel: options.enableParallel !== false,       // NEW: Enable parallel interactions
       enableMultiplePasses: options.enableMultiplePasses !== false,
+      maxRescans: options.maxRescans || 3,                    // NEW: Limit rescans to prevent infinite loops
       enableFormInteraction: options.enableFormInteraction !== false,
       enableKeyboardEvents: options.enableKeyboardEvents !== false,
       enableDoubleClick: options.enableDoubleClick !== false,
@@ -62,6 +63,7 @@ class InteractionHandler {
     this.totalInteractions = 0;
     this.totalElementsFound = 0; // Total including duplicates
     this.deduplicatedCount = 0;  // How many were skipped as duplicates
+    this.rescanCount = 0;         // NEW: Track number of rescans to prevent infinite loops
   }
 
   /**
@@ -158,6 +160,15 @@ class InteractionHandler {
     }
 
     this.currentDepth = Math.max(this.currentDepth, depth);
+
+    // Reset rescan counter for each new depth
+    if (depth === 0 || !this.rescanCountPerDepth) {
+      this.rescanCountPerDepth = new Map();
+    }
+    if (!this.rescanCountPerDepth.has(depth)) {
+      this.rescanCountPerDepth.set(depth, 0);
+    }
+
     console.log(`      [INSANE-DEEP] 🎯 Depth ${depth}: Starting interaction round`);
 
     // Scroll entire page at depth 0
@@ -396,14 +407,31 @@ class InteractionHandler {
       }
     }
 
-    // If multiple passes enabled, rescan for new elements
+    // If multiple passes enabled, rescan for new elements (with loop protection)
     if (this.options.enableMultiplePasses && depth < 2) {
-      const newElements = await this._findAllInteractiveElements();
-      const untriedElements = newElements.filter(e => !this.clickedElements.has(e.signature));
+      // Don't rescan if we've hit the interaction limit
+      if (this.totalInteractions >= this.options.maxClicksPerPage) {
+        console.log(`      [INSANE-DEEP] ⚠️  Depth ${depth}: Interaction limit (${this.options.maxClicksPerPage}) reached, skipping rescan`);
+        return;
+      }
 
-      if (untriedElements.length > 0) {
-        console.log(`      [INSANE-DEEP] 🔄 Depth ${depth}: Found ${untriedElements.length} NEW elements! Rescanning...`);
-        await this._recursiveInteraction(depth);
+      const currentRescans = this.rescanCountPerDepth.get(depth) || 0;
+
+      if (currentRescans >= this.options.maxRescans) {
+        console.log(`      [INSANE-DEEP] ⚠️  Depth ${depth}: Max rescans (${this.options.maxRescans}) reached, skipping rescan`);
+      } else {
+        const newElements = await this._findAllInteractiveElements();
+        const untriedElements = newElements.filter(e => !this.clickedElements.has(e.signature));
+
+        // Only rescan if we found a reasonable number of NEW elements
+        // (not thousands, which indicates a detection bug)
+        if (untriedElements.length > 0 && untriedElements.length < 500) {
+          this.rescanCountPerDepth.set(depth, currentRescans + 1);
+          console.log(`      [INSANE-DEEP] 🔄 Depth ${depth}: Found ${untriedElements.length} NEW elements! Rescanning (${currentRescans + 1}/${this.options.maxRescans})...`);
+          await this._recursiveInteraction(depth);
+        } else if (untriedElements.length >= 500) {
+          console.log(`      [INSANE-DEEP] ⚠️  Depth ${depth}: Found ${untriedElements.length} elements (too many, likely a bug), skipping rescan`);
+        }
       }
     }
 
